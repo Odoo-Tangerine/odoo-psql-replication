@@ -1,0 +1,112 @@
+services:
+  # PostgreSQL Primary (Master) - Port 5432 (external: 5433)
+  pg_primary:
+    image: postgres:16
+    container_name: pg_primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "5433:5432"
+    command:
+      - -c
+      - listen_addresses=*
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - log_statement=all
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -h localhost -p 5432"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - primary_data:/var/lib/postgresql/data
+      - ./pg_primary:/docker-entrypoint-initdb.d
+    networks:
+      - shared_network
+
+  # PostgreSQL Replica (Read-Only) - Port 5434
+  pg_replica:
+    image: postgres:16
+    container_name: pg_replica
+    restart: unless-stopped
+    depends_on:
+      pg_primary:
+        condition: service_healthy
+    environment:
+      REPL_USER: replicator
+      REPL_PASSWORD: replpass
+    ports:
+      - "5434:5432"
+    entrypoint: ["/bin/bash", "/usr/local/bin/replica-entrypoint.sh"]
+    command:
+      - -c
+      - listen_addresses=*
+      - -c
+      - log_statement=all
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost -p 5432 && psql -U postgres -c 'SELECT pg_is_in_recovery();' | grep -q t"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - replica_data:/var/lib/postgresql/data
+      - ./pg_replica/replica-entrypoint.sh:/usr/local/bin/replica-entrypoint.sh:ro
+    networks:
+      - shared_network
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    labels:
+      - "dev.orbstack.domains=pgadmin.psql.local"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - shared_network
+    depends_on:
+      pg_primary:
+        condition: service_healthy
+
+  # # ═══════════════════════════════════════════════════════════════
+  # # HAProxy - Load Balancer cho nhiều Replica (Optional)
+  # # Bật service này nếu bạn muốn dùng nhiều pg_replica
+  # # ═══════════════════════════════════════════════════════════════
+  # pg_replica_lb:
+  #   image: haproxy:latest
+  #   container_name: pg_replica_lb
+  #   ports:
+  #     - "5435:5432"
+  #   volumes:
+  #     - ./haproxy:/usr/local/etc/haproxy:ro
+  #   networks:
+  #     - shared_network
+  #   depends_on:
+  #     - pg_replica
+
+volumes:
+  primary_data:
+  replica_data:
+  pgadmin_data:
+
+networks:
+  shared_network:
+    name: shared_network
+    driver: bridge

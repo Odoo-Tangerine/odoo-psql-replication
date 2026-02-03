@@ -1,0 +1,16 @@
+# PostgreSQL Data
+primary_data/
+replica_data/
+pgadmin_data/
+archive/
+
+# Environment Variables
+.env
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
